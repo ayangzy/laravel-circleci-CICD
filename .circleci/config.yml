@@ -1,0 +1,86 @@
+version: 2.1
+orbs:
+  docker: circleci/docker@2.1.2
+jobs:
+  build-and-test:
+    description: Setup laravel application and run tests
+    docker:
+      # Specify the version you desire here
+      - image: cimg/php:8.0-browsers
+
+    steps:
+      - checkout
+
+      - run:
+          name: "Preparing environment"
+          command: |
+            sudo apt update
+      # Download and cache dependencies
+      - restore_cache:
+          keys:
+            # "composer.lock" can be used if it is committed to the repo
+            - v1-dependencies-{{ checksum "composer.json" }}
+            # fallback to using the latest cache if no exact match is found
+            - v1-dependencies-
+
+      - run:
+          name: "Installing dependencies"
+          command: composer install  -n --no-interaction --prefer-dist --optimize-autoloader;
+
+      - save_cache:
+          key: v1-dependencies-{{ checksum "composer.json" }}
+          paths:
+            - ./vendor
+
+      - run:
+          name: "clearing application cache"
+          command: |
+            php artisan config:clear
+
+      - run:
+          name: "creating migration and running seeders"
+          command: |
+            php artisan migrate:fresh --force
+
+      - run:
+          name: "Runing tests"
+          command: php vendor/bin/phpunit
+
+      - run:
+          name: "Dumping autoload files"
+          command: |
+            php artisan clear-compiled
+            php artisan auth:clear-resets
+            php artisan optimize:clear
+            php artisan config:cache
+            php artisan view:cache
+            php artisan route:cache
+            composer dump-autoload
+
+  build-docker-image:
+    executor:
+      name: docker/docker
+      tag: "3.6"
+    steps:
+      - checkout
+      - docker/install-docker-tools
+      - setup_remote_docker:
+          version: 20.10.14
+          docker_layer_caching: true
+      - run:
+          name: "Build and push Docker image"
+          command: |
+            docker build -t forumapp.azurecr.io/forumapp:latest .
+            docker login -u $DOCKER_USER -p $DOCKER_PASS forumapp.azurecr.io
+            docker push forumapp.azurecr.io/forumapp:latest
+
+workflows:
+  build-and-deploy:
+    jobs:
+      - build-and-test
+      - build-docker-image:
+          requires:
+            - build-and-test
+          filters:
+            branches:
+              only: master
